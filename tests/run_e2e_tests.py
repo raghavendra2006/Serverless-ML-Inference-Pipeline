@@ -3,63 +3,59 @@ import time
 import json
 import glob
 import uuid
-import threading
+import boto3
 import urllib.request
-import urllib.parse
-
-# This script does not use boto3 or external dependencies to ensure it can run natively or with minimal setup.
-# Actually, standard library works for polling SNS/SQS locally via LocalStack API.
 
 LOCALSTACK_URL = "http://localhost:4566"
 INTAKE_API_URL = os.environ.get("INTAKE_API_URL", "http://localhost:8080/upload")
 
-def aws_request(service, action, params):
-    data = urllib.parse.urlencode({'Action': action, 'Version': '2012-11-05', **params}).encode('utf-8')
-    req = urllib.request.Request(LOCALSTACK_URL, data=data)
-    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-    try:
-        response = urllib.request.urlopen(req)
-        return response.read().decode('utf-8')
-    except Exception as e:
-        print(f"AWS Request Error ({service}:{action}):", e)
-        return ""
+# Configure boto3 clients
+sqs_client = boto3.client(
+    'sqs',
+    endpoint_url=LOCALSTACK_URL,
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test'
+)
+sns_client = boto3.client(
+    'sns',
+    endpoint_url=LOCALSTACK_URL,
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test'
+)
 
 def setup_sqs_subscription():
-    # Since we can't easily parse XML with standard lib safely, we'll just use basic string matching
     # Create SQS queue
     queue_name = f"test-queue-{uuid.uuid4()}"
-    res = aws_request('sqs', 'CreateQueue', {'QueueName': queue_name})
-    queue_url = f"{LOCALSTACK_URL}/000000000000/{queue_name}"
+    queue_res = sqs_client.create_queue(QueueName=queue_name)
+    queue_url = queue_res['QueueUrl']
     
-    # Get SNS Topic ARN (assuming it's proptech-notifications)
-    topic_arn = "arn:aws:sns:us-east-1:000000000000:proptech-notifications"
+    # Get Queue ARN
+    queue_attr = sqs_client.get_queue_attributes(QueueUrl=queue_url, AttributeNames=['QueueArn'])
+    queue_arn = queue_attr['Attributes']['QueueArn']
     
+    # Fetch SNS Topic ARN (proptech-notifications)
+    topics = sns_client.list_topics()
+    topic_arn = None
+    for t in topics.get('Topics', []):
+        if 'proptech-notifications' in t['TopicArn']:
+            topic_arn = t['TopicArn']
+            break
+            
+    if not topic_arn:
+        # Fallback creation if not found
+        topic_res = sns_client.create_topic(Name='proptech-notifications')
+        topic_arn = topic_res['TopicArn']
+        
     # Subscribe SQS to SNS
-    aws_request('sns', 'Subscribe', {
-        'TopicArn': topic_arn,
-        'Protocol': 'sqs',
-        'Endpoint': queue_url
-    })
+    sns_client.subscribe(
+        TopicArn=topic_arn,
+        Protocol='sqs',
+        Endpoint=queue_arn
+    )
     
     return queue_url
-
-def receive_messages(queue_url):
-    data = urllib.parse.urlencode({'Action': 'ReceiveMessage', 'QueueUrl': queue_url, 'Version': '2012-11-05', 'WaitTimeSeconds': '5'}).encode('utf-8')
-    req = urllib.request.Request(LOCALSTACK_URL, data=data)
-    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-    messages = []
-    try:
-        response = urllib.request.urlopen(req).read().decode('utf-8')
-        # Simple extraction of Body
-        parts = response.split('<Body>')
-        for i in range(1, len(parts)):
-            body = parts[i].split('</Body>')[0]
-            # HTML decode
-            body = body.replace('&quot;', '"').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-            messages.append(body)
-    except Exception as e:
-        pass
-    return messages
 
 def post_image(filepath):
     import mimetypes
@@ -87,9 +83,13 @@ def post_image(filepath):
         return None, 0
 
 def run_tests():
-    queue_url = setup_sqs_subscription()
-    print(f"Listening on queue: {queue_url}")
-    
+    try:
+        queue_url = setup_sqs_subscription()
+        print(f"Listening on queue: {queue_url}")
+    except Exception as e:
+        print("Could not connect to LocalStack to setup test queue:", e)
+        return
+        
     sample_dir = os.path.join(os.path.dirname(__file__), 'sample_images')
     images = glob.glob(os.path.join(sample_dir, '*.jpg'))
     
@@ -114,11 +114,17 @@ def run_tests():
         found = False
         start_poll = time.time()
         while time.time() - start_poll < 30: # 30s timeout
-            msgs = receive_messages(queue_url)
-            for msg in msgs:
-                try:
-                    sns_msg = json.loads(msg)
+            try:
+                msgs = sqs_client.receive_message(
+                    QueueUrl=queue_url,
+                    WaitTimeSeconds=5,
+                    MaxNumberOfMessages=10
+                )
+                
+                for msg in msgs.get('Messages', []):
+                    sns_msg = json.loads(msg['Body'])
                     payload = json.loads(sns_msg['Message'])
+                    
                     if payload.get('image_key') == s3_key:
                         latency_ms = (time.time() - start_poll + post_latency) * 1000
                         total_latency += latency_ms
@@ -132,12 +138,14 @@ def run_tests():
                             "correctly_processed": status in ["APPROVED", "REJECTED"]
                         })
                         found = True
+                        sqs_client.delete_message(QueueUrl=queue_url, ReceiptHandle=msg['ReceiptHandle'])
                         break
-                except Exception as e:
-                    print("Parse error on message:", e)
+            except Exception as e:
+                print("Parse/poll error:", e)
+                
             if found:
                 break
-            time.sleep(2)
+            time.sleep(1)
             
         if not found:
             results.append({

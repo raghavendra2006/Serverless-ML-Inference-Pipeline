@@ -164,7 +164,7 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.QualityResult.Payload.is_blurry",
+          "Variable": "$.QualityResult.is_blurry",
           "BooleanEquals": true,
           "Next": "RejectQuality"
         }

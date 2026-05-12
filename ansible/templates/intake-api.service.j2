@@ -15,7 +15,7 @@ Environment="AWS_DEFAULT_REGION=us-east-1"
 Environment="AWS_ENDPOINT_URL=http://127.0.0.1:4566"
 Environment="UPLOAD_WORKERS=10"
 # Dynamic Worker Calculation: 2 * CPU + 1 for optimal concurrent I/O
-ExecStart=/bin/bash -c "exec {{ app_dir }}/venv/bin/gunicorn --workers $(expr $(nproc) \* 2 + 1) --threads 4 --bind 127.0.0.1:{{ port }} -m 007 app:app"
+ExecStart=/bin/bash -c "exec {{ app_dir }}/venv/bin/gunicorn --workers $(( $(nproc) * 2 + 1 )) --threads 4 --bind 127.0.0.1:{{ port }} -m 007 app:app"
 
 [Install]
 WantedBy=multi-user.target
