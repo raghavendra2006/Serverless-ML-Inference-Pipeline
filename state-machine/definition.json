@@ -1,5 +1,5 @@
 {
-  "Comment": "Serverless ML Inference Pipeline",
+  "Comment": "Robust Serverless ML Inference Pipeline with Enterprise Error Handling",
   "StartAt": "ExtractS3Details",
   "States": {
     "ExtractS3Details": {
@@ -22,16 +22,35 @@
           }
         }
       },
-      "ResultPath": "$.ModerationResult",
-      "Next": "ModerationChoice",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.Timeout",
+            "Rekognition.ProvisionedThroughputExceededException",
+            "Rekognition.InternalServerError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
       "Catch": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "Next": "FailState"
+        },
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "Next": "FailState"
         }
-      ]
+      ],
+      "ResultPath": "$.ModerationResult",
+      "Next": "ModerationChoice"
     },
     "ModerationChoice": {
       "Type": "Choice",
@@ -73,16 +92,35 @@
           }
         }
       },
-      "ResultPath": "$.ClassificationResult",
-      "Next": "QualityCheck",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.Timeout",
+            "Rekognition.ProvisionedThroughputExceededException",
+            "Rekognition.InternalServerError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
       "Catch": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "Next": "FailState"
+        },
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "Next": "FailState"
         }
-      ]
+      ],
+      "ResultPath": "$.ClassificationResult",
+      "Next": "QualityCheck"
     },
     "QualityCheck": {
       "Type": "Task",
@@ -91,16 +129,36 @@
         "s3_bucket.$": "$.S3Details.s3_bucket",
         "s3_key.$": "$.S3Details.s3_key"
       },
-      "ResultPath": "$.QualityResult",
-      "Next": "QualityChoice",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
       "Catch": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "States.Timeout"
+          ],
+          "Next": "FailState"
+        },
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "Next": "FailState"
         }
-      ]
+      ],
+      "ResultPath": "$.QualityResult",
+      "Next": "QualityChoice"
     },
     "QualityChoice": {
       "Type": "Choice",
@@ -140,6 +198,17 @@
         "TopicArn": "<SNS_TOPIC_ARN>",
         "Message.$": "States.JsonToString($.FinalResult)"
       },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.Timeout",
+            "SNS.SNSException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
       "End": true,
       "Catch": [
         {
@@ -157,7 +226,7 @@
         "TopicArn": "<SNS_TOPIC_ARN>",
         "Message": {
           "status": "FAILED",
-          "reason": "pipeline_error"
+          "reason": "pipeline_error_or_timeout"
         }
       },
       "End": true

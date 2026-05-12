@@ -13,7 +13,9 @@ Environment="AWS_SECRET_ACCESS_KEY=test"
 Environment="AWS_DEFAULT_REGION=us-east-1"
 # For LocalStack, configure the endpoint URL to point to the host machine's LocalStack port
 Environment="AWS_ENDPOINT_URL=http://127.0.0.1:4566"
-ExecStart={{ app_dir }}/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:{{ port }} -m 007 app:app
+Environment="UPLOAD_WORKERS=10"
+# Dynamic Worker Calculation: 2 * CPU + 1 for optimal concurrent I/O
+ExecStart=/bin/bash -c "exec {{ app_dir }}/venv/bin/gunicorn --workers $(expr $(nproc) \* 2 + 1) --threads 4 --bind 127.0.0.1:{{ port }} -m 007 app:app"
 
 [Install]
 WantedBy=multi-user.target
