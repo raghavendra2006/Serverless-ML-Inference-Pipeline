@@ -133,10 +133,13 @@ def run_tests():
                         results.append({
                             "image_file": os.path.basename(img),
                             "pipeline_status": status,
-                            "expected_status": "APPROVED", # Mock assumption
+                            "expected_status": "APPROVED", 
                             "latency_ms": round(latency_ms, 2),
-                            "correctly_processed": status in ["APPROVED", "REJECTED"]
+                            "correctly_processed": status in ["APPROVED", "REJECTED"],
+                            "has_metadata": all(k in payload for k in ["processed_at", "image_key", "status"])
                         })
+                        if not all(k in payload for k in ["processed_at", "image_key", "status"]):
+                            print(f"WARNING: Missing metadata in response for {s3_key}")
                         found = True
                         sqs_client.delete_message(QueueUrl=queue_url, ReceiptHandle=msg['ReceiptHandle'])
                         break

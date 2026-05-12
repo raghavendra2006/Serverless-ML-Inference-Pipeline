@@ -4,10 +4,25 @@ import cv2
 import numpy as np
 import json
 import logging
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure robust structured JSON logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# Configuration from environment variables
+BLUR_THRESHOLD = float(os.environ.get('BLUR_THRESHOLD', 100.0))
+
+# Configure boto3 client outside for reuse
+endpoint_url = None
+if 'LOCALSTACK_HOSTNAME' in os.environ:
+    endpoint_url = f"http://{os.environ['LOCALSTACK_HOSTNAME']}:4566"
+
+s3_client = boto3.client('s3', endpoint_url=endpoint_url)
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+def get_s3_object_with_retry(bucket, key):
+    return s3_client.get_object(Bucket=bucket, Key=key)
 
 def lambda_handler(event, context):
     try:
@@ -22,24 +37,17 @@ def lambda_handler(event, context):
         logger.info(json.dumps({
             "event": "quality_check_started",
             "s3_bucket": s3_bucket,
-            "s3_key": s3_key
+            "s3_key": s3_key,
+            "threshold": BLUR_THRESHOLD
         }))
 
-        # Configure boto3 client efficiently
-        endpoint_url = None
-        if 'LOCALSTACK_HOSTNAME' in os.environ:
-            endpoint_url = f"http://{os.environ['LOCALSTACK_HOSTNAME']}:4566"
+        # Fetch with retry logic
+        response = get_s3_object_with_retry(s3_bucket, s3_key)
         
-        s3 = boto3.client('s3', endpoint_url=endpoint_url)
-
-        # Stream the object instead of loading entirely into memory at once
-        response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
-        
-        # Read iteratively or use streaming buffer to numpy array
-        # For OpenCV decoding from buffer, we still need the bytes, but using bytearray is more memory efficient
+        # Memory-efficient reading
         streaming_body = response['Body']
         file_bytes = bytearray()
-        for chunk in streaming_body.iter_chunks(chunk_size=1024*1024): # 1MB chunks
+        for chunk in streaming_body.iter_chunks(chunk_size=1024*1024): 
             file_bytes.extend(chunk)
 
         nparr = np.frombuffer(file_bytes, np.uint8)
@@ -48,7 +56,7 @@ def lambda_handler(event, context):
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         if image is None:
-            error_msg = "Could not decode image bytes into valid OpenCV format."
+            error_msg = "FAILED_DECODE: Bytes provided are not a valid image."
             logger.error(json.dumps({"event": "decode_failed", "s3_key": s3_key, "error": error_msg}))
             return {"error": error_msg}
 
@@ -58,11 +66,12 @@ def lambda_handler(event, context):
         # Calculate variance of Laplacian
         blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
         
-        is_blurry = bool(blur_score < 100.0)
+        is_blurry = bool(blur_score < BLUR_THRESHOLD)
 
         result_payload = {
             "is_blurry": is_blurry,
-            "blur_score": float(blur_score)
+            "blur_score": round(float(blur_score), 4),
+            "threshold_used": BLUR_THRESHOLD
         }
         
         logger.info(json.dumps({

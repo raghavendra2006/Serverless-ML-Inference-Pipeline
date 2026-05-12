@@ -1,12 +1,13 @@
 {
-  "Comment": "Robust Serverless ML Inference Pipeline with Enterprise Error Handling",
+  "Comment": "Enterprise-grade Serverless ML Inference Pipeline",
   "StartAt": "ExtractS3Details",
   "States": {
     "ExtractS3Details": {
       "Type": "Pass",
       "Parameters": {
         "s3_bucket.$": "$.Records[0].s3.bucket.name",
-        "s3_key.$": "$.Records[0].s3.object.key"
+        "s3_key.$": "$.Records[0].s3.object.key",
+        "timestamp.$": "$$.Execution.StartTime"
       },
       "ResultPath": "$.S3Details",
       "Next": "ContentModeration"
@@ -20,28 +21,23 @@
             "Bucket.$": "$.S3Details.s3_bucket",
             "Name.$": "$.S3Details.s3_key"
           }
-        }
+        },
+        "MinConfidence": 70
       },
       "Retry": [
         {
           "ErrorEquals": [
             "States.Timeout",
             "Rekognition.ProvisionedThroughputExceededException",
-            "Rekognition.InternalServerError"
+            "Rekognition.InternalServerError",
+            "Rekognition.ThrottlingException"
           ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 5,
           "BackoffRate": 2.0
         }
       ],
       "Catch": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed",
-            "States.Timeout"
-          ],
-          "Next": "FailState"
-        },
         {
           "ErrorEquals": [
             "States.ALL"
@@ -56,16 +52,8 @@
       "Type": "Choice",
       "Choices": [
         {
-          "And": [
-            {
-              "Variable": "$.ModerationResult.ModerationLabels[0]",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.ModerationResult.ModerationLabels[0].Confidence",
-              "NumericGreaterThan": 80.0
-            }
-          ],
+          "Variable": "$.ModerationResult.ModerationLabels[0]",
+          "IsPresent": true,
           "Next": "RejectModeration"
         }
       ],
@@ -75,8 +63,10 @@
       "Type": "Pass",
       "Parameters": {
         "status": "REJECTED",
-        "reason": "inappropriate_content",
-        "image_key.$": "$.S3Details.s3_key"
+        "reason": "content_moderation_failure",
+        "details.$": "$.ModerationResult.ModerationLabels",
+        "image_key.$": "$.S3Details.s3_key",
+        "processed_at.$": "$$.Execution.StartTime"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -90,28 +80,24 @@
             "Bucket.$": "$.S3Details.s3_bucket",
             "Name.$": "$.S3Details.s3_key"
           }
-        }
+        },
+        "MaxLabels": 10,
+        "MinConfidence": 80
       },
       "Retry": [
         {
           "ErrorEquals": [
             "States.Timeout",
             "Rekognition.ProvisionedThroughputExceededException",
-            "Rekognition.InternalServerError"
+            "Rekognition.InternalServerError",
+            "Rekognition.ThrottlingException"
           ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 5,
           "BackoffRate": 2.0
         }
       ],
       "Catch": [
-        {
-          "ErrorEquals": [
-            "States.TaskFailed",
-            "States.Timeout"
-          ],
-          "Next": "FailState"
-        },
         {
           "ErrorEquals": [
             "States.ALL"
@@ -145,13 +131,6 @@
       "Catch": [
         {
           "ErrorEquals": [
-            "States.TaskFailed",
-            "States.Timeout"
-          ],
-          "Next": "FailState"
-        },
-        {
-          "ErrorEquals": [
             "States.ALL"
           ],
           "Next": "FailState"
@@ -175,8 +154,10 @@
       "Type": "Pass",
       "Parameters": {
         "status": "REJECTED",
-        "reason": "low_quality",
-        "image_key.$": "$.S3Details.s3_key"
+        "reason": "blur_detection_failure",
+        "score.$": "$.QualityResult.blur_score",
+        "image_key.$": "$.S3Details.s3_key",
+        "processed_at.$": "$$.Execution.StartTime"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -186,7 +167,9 @@
       "Parameters": {
         "status": "APPROVED",
         "image_key.$": "$.S3Details.s3_key",
-        "tags.$": "$.ClassificationResult.Labels[*].Name"
+        "classification.$": "$.ClassificationResult.Labels",
+        "quality_score.$": "$.QualityResult.blur_score",
+        "processed_at.$": "$$.Execution.StartTime"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -196,7 +179,13 @@
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "<SNS_TOPIC_ARN>",
-        "Message.$": "States.JsonToString($.FinalResult)"
+        "Message.$": "States.JsonToString($.FinalResult)",
+        "MessageAttributes": {
+          "Status": {
+            "DataType": "String",
+            "StringValue.$": "$.FinalResult.status"
+          }
+        }
       },
       "Retry": [
         {
@@ -225,8 +214,8 @@
       "Parameters": {
         "TopicArn": "<SNS_TOPIC_ARN>",
         "Message": {
-          "status": "FAILED",
-          "reason": "pipeline_error_or_timeout"
+          "status": "CRITICAL_FAILURE",
+          "reason": "unhandled_pipeline_exception"
         }
       },
       "End": true

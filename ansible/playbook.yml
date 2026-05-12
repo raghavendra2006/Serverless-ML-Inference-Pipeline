@@ -123,6 +123,5 @@
         state: restarted
 
     - name: Reload Nginx
-      service:
-        name: nginx
-        state: reloaded
+      shell: nginx -t && systemctl reload nginx
+      become: yes
