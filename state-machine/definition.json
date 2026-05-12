@@ -1,0 +1,166 @@
+{
+  "Comment": "Serverless ML Inference Pipeline",
+  "StartAt": "ExtractS3Details",
+  "States": {
+    "ExtractS3Details": {
+      "Type": "Pass",
+      "Parameters": {
+        "s3_bucket.$": "$.Records[0].s3.bucket.name",
+        "s3_key.$": "$.Records[0].s3.object.key"
+      },
+      "ResultPath": "$.S3Details",
+      "Next": "ContentModeration"
+    },
+    "ContentModeration": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rekognition:detectModerationLabels",
+      "Parameters": {
+        "Image": {
+          "S3Object": {
+            "Bucket.$": "$.S3Details.s3_bucket",
+            "Name.$": "$.S3Details.s3_key"
+          }
+        }
+      },
+      "ResultPath": "$.ModerationResult",
+      "Next": "ModerationChoice",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailState"
+        }
+      ]
+    },
+    "ModerationChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.ModerationResult.ModerationLabels[0]",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ModerationResult.ModerationLabels[0].Confidence",
+              "NumericGreaterThan": 80.0
+            }
+          ],
+          "Next": "RejectModeration"
+        }
+      ],
+      "Default": "ClassifyRoomType"
+    },
+    "RejectModeration": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "REJECTED",
+        "reason": "inappropriate_content",
+        "image_key.$": "$.S3Details.s3_key"
+      },
+      "ResultPath": "$.FinalResult",
+      "Next": "NotifyAgent"
+    },
+    "ClassifyRoomType": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rekognition:detectLabels",
+      "Parameters": {
+        "Image": {
+          "S3Object": {
+            "Bucket.$": "$.S3Details.s3_bucket",
+            "Name.$": "$.S3Details.s3_key"
+          }
+        }
+      },
+      "ResultPath": "$.ClassificationResult",
+      "Next": "QualityCheck",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailState"
+        }
+      ]
+    },
+    "QualityCheck": {
+      "Type": "Task",
+      "Resource": "<LAMBDA_ARN>",
+      "Parameters": {
+        "s3_bucket.$": "$.S3Details.s3_bucket",
+        "s3_key.$": "$.S3Details.s3_key"
+      },
+      "ResultPath": "$.QualityResult",
+      "Next": "QualityChoice",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailState"
+        }
+      ]
+    },
+    "QualityChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.QualityResult.Payload.is_blurry",
+          "BooleanEquals": true,
+          "Next": "RejectQuality"
+        }
+      ],
+      "Default": "ApproveImage"
+    },
+    "RejectQuality": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "REJECTED",
+        "reason": "low_quality",
+        "image_key.$": "$.S3Details.s3_key"
+      },
+      "ResultPath": "$.FinalResult",
+      "Next": "NotifyAgent"
+    },
+    "ApproveImage": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "APPROVED",
+        "image_key.$": "$.S3Details.s3_key",
+        "tags.$": "$.ClassificationResult.Labels[*].Name"
+      },
+      "ResultPath": "$.FinalResult",
+      "Next": "NotifyAgent"
+    },
+    "NotifyAgent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "<SNS_TOPIC_ARN>",
+        "Message.$": "States.JsonToString($.FinalResult)"
+      },
+      "End": true,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailState"
+        }
+      ]
+    },
+    "FailState": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "<SNS_TOPIC_ARN>",
+        "Message": {
+          "status": "FAILED",
+          "reason": "pipeline_error"
+        }
+      },
+      "End": true
+    }
+  }
+}

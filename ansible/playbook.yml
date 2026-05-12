@@ -1,0 +1,128 @@
+---
+- name: Setup Intake API Server
+  hosts: api_servers
+  become: yes
+  vars:
+    app_dir: "/var/www/intake-api"
+    app_user: "www-data"
+    port: 8080
+
+  tasks:
+    - name: Ensure apt cache is up to date
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+    - name: Install required packages (Nginx, Python)
+      apt:
+        name:
+          - nginx
+          - python3
+          - python3-pip
+          - python3-venv
+          - ufw
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Copy Intake API source code
+      copy:
+        src: "../src/intake-api/"
+        dest: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0644'
+      notify: Restart Intake API
+
+    - name: Ensure __pycache__ has correct permissions if exists
+      file:
+        path: "{{ app_dir }}/__pycache__"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+      ignore_errors: yes
+
+    - name: Setup Python virtual environment and install dependencies
+      pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        virtualenv: "{{ app_dir }}/venv"
+        virtualenv_command: "python3 -m venv"
+      become_user: "{{ app_user }}"
+      notify: Restart Intake API
+
+    - name: Deploy systemd service file
+      template:
+        src: intake-api.service.j2
+        dest: /etc/systemd/system/intake-api.service
+      notify: Restart Intake API
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Deploy Nginx configuration
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/intake-api
+      notify: Reload Nginx
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/intake-api
+        dest: /etc/nginx/sites-enabled/intake-api
+        state: link
+      notify: Reload Nginx
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload Nginx
+
+    - name: Ensure firewall allows OpenSSH
+      ufw:
+        rule: allow
+        name: OpenSSH
+      when: ansible_os_family == 'Debian'
+
+    - name: Ensure firewall allows Nginx Full
+      ufw:
+        rule: allow
+        name: "Nginx Full"
+      when: ansible_os_family == 'Debian'
+
+    - name: Enable firewall
+      ufw:
+        state: enabled
+      when: ansible_os_family == 'Debian'
+
+    - name: Ensure Intake API service is started and enabled
+      systemd:
+        name: intake-api
+        state: started
+        enabled: yes
+
+    - name: Ensure Nginx is started and enabled
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Restart Intake API
+      systemd:
+        name: intake-api
+        state: restarted
+
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded

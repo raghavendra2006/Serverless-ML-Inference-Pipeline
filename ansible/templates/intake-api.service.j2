@@ -1,0 +1,19 @@
+[Unit]
+Description=Gunicorn instance to serve Intake API
+After=network.target
+
+[Service]
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+Environment="PATH={{ app_dir }}/venv/bin"
+Environment="FLASK_ENV=production"
+Environment="AWS_ACCESS_KEY_ID=test"
+Environment="AWS_SECRET_ACCESS_KEY=test"
+Environment="AWS_DEFAULT_REGION=us-east-1"
+# For LocalStack, configure the endpoint URL to point to the host machine's LocalStack port
+Environment="AWS_ENDPOINT_URL=http://127.0.0.1:4566"
+ExecStart={{ app_dir }}/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:{{ port }} -m 007 app:app
+
+[Install]
+WantedBy=multi-user.target
