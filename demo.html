@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PropTech ML Pipeline Demo</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --primary-hover: #4338CA;
+            --bg: #0F172A;
+            --surface: #1E293B;
+            --text: #F8FAFC;
+            --text-muted: #94A3B8;
+            --success: #10B981;
+            --error: #EF4444;
+            --border: #334155;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(to right, #818CF8, #C084FC);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+        
+        .upload-card {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 40px;
+            border: 1px solid var(--border);
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            margin-bottom: 30px;
+        }
+        
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            background: rgba(15, 23, 42, 0.4);
+            margin-bottom: 20px;
+        }
+        
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background: rgba(79, 70, 229, 0.05);
+        }
+        
+        .drop-zone-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: var(--primary);
+        }
+        
+        .drop-zone-text {
+            color: var(--text-muted);
+            margin-bottom: 5px;
+            font-size: 1.1rem;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            background: var(--primary-hover);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        #preview-container {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        #preview-image {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        
+        .response-card {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 30px;
+            border: 1px solid var(--border);
+            display: none;
+            animation: slideUp 0.4s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .response-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-left: auto;
+        }
+        
+        .status-success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        
+        .status-error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--error);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+        
+        .json-response {
+            background: #0B1120;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            color: #A5B4FC;
+            border: 1px solid #1E293B;
+        }
+        
+        .pipeline-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+        
+        .step {
+            text-align: center;
+            flex: 1;
+            position: relative;
+        }
+        
+        .step:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            top: 15px;
+            right: -50%;
+            width: 100%;
+            height: 2px;
+            background: var(--border);
+            z-index: 1;
+        }
+        
+        .step-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px;
+            position: relative;
+            z-index: 2;
+            color: var(--text-muted);
+            transition: all 0.3s;
+        }
+        
+        .step.active .step-icon {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 0 15px rgba(79, 70, 229, 0.5);
+        }
+        
+        .step-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        
+        .step.active .step-label {
+            color: var(--text);
+        }
+
+        .loader {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PropTech ML Inference</h1>
+            <p class="subtitle">Serverless Event-Driven Image Pipeline</p>
+        </header>
+        
+        <div class="upload-card">
+            <form id="upload-form">
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-zone-icon">📷</div>
+                    <div class="drop-zone-text">Drag & drop an image here</div>
+                    <div style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 15px;">or click to browse files</div>
+                    <input type="file" id="file-input" class="file-input" accept="image/jpeg, image/png, image/bmp">
+                    <button type="button" class="btn" style="width: auto; background: var(--surface); border: 1px solid var(--border);" onclick="document.getElementById('file-input').click()">
+                        Select Image
+                    </button>
+                </div>
+                
+                <div id="preview-container">
+                    <img id="preview-image" src="" alt="Preview">
+                    <div style="margin-top: 15px; color: var(--text-muted); font-size: 0.9rem;" id="file-name"></div>
+                </div>
+                
+                <button type="submit" id="submit-btn" class="btn" style="margin-top: 20px;" disabled>
+                    <div class="loader" id="loader"></div>
+                    <span id="btn-text">Process via ML Pipeline</span>
+                </button>
+            </form>
+        </div>
+        
+        <div class="response-card" id="response-card">
+            <div class="response-header">
+                <h3>Pipeline Triggered Successfully</h3>
+                <div class="status-badge status-success" id="status-badge">202 Accepted</div>
+            </div>
+            
+            <p style="color: var(--text-muted); margin-bottom: 15px;">API Response:</p>
+            <pre class="json-response" id="json-response"></pre>
+            
+            <div class="pipeline-steps">
+                <div class="step active" id="step-1">
+                    <div class="step-icon">1</div>
+                    <div class="step-label">Intake API</div>
+                </div>
+                <div class="step" id="step-2">
+                    <div class="step-icon">2</div>
+                    <div class="step-label">S3 Upload</div>
+                </div>
+                <div class="step" id="step-3">
+                    <div class="step-icon">3</div>
+                    <div class="step-label">AWS Step Functions</div>
+                </div>
+                <div class="step" id="step-4">
+                    <div class="step-icon">4</div>
+                    <div class="step-label">ML & Quality Check</div>
+                </div>
+                <div class="step" id="step-5">
+                    <div class="step-icon">5</div>
+                    <div class="step-label">SNS Notification</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const previewContainer = document.getElementById('preview-container');
+        const previewImage = document.getElementById('preview-image');
+        const fileName = document.getElementById('file-name');
+        const submitBtn = document.getElementById('submit-btn');
+        const uploadForm = document.getElementById('upload-form');
+        const responseCard = document.getElementById('response-card');
+        const jsonResponse = document.getElementById('json-response');
+        const loader = document.getElementById('loader');
+        const btnText = document.getElementById('btn-text');
+        
+        let currentFile = null;
+
+        // Prevent default drag behaviors
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // Highlight drop zone
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
+        });
+
+        // Handle dropped files
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        });
+
+        fileInput.addEventListener('change', function() {
+            handleFiles(this.files);
+        });
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                currentFile = files[0];
+                
+                // Show preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    previewImage.src = e.target.result;
+                    previewContainer.style.display = 'block';
+                    dropZone.style.display = 'none';
+                    fileName.textContent = currentFile.name + ' (' + (currentFile.size / 1024).toFixed(2) + ' KB)';
+                    submitBtn.disabled = false;
+                }
+                reader.readAsDataURL(currentFile);
+            }
+        }
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentFile) return;
+
+            const formData = new FormData();
+            formData.append('image', currentFile);
+
+            // UI State loading
+            submitBtn.disabled = true;
+            loader.style.display = 'inline-block';
+            btnText.textContent = 'Uploading to API...';
+            responseCard.style.display = 'none';
+
+            try {
+                const response = await fetch('http://localhost:8080/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                
+                // Show response
+                jsonResponse.textContent = JSON.stringify(data, null, 2);
+                responseCard.style.display = 'block';
+                
+                // Reset UI
+                submitBtn.disabled = false;
+                loader.style.display = 'none';
+                btnText.textContent = 'Process Another Image';
+                dropZone.style.display = 'block';
+                previewContainer.style.display = 'none';
+                currentFile = null;
+                fileInput.value = '';
+                
+                // Animate steps
+                animateSteps();
+
+            } catch (error) {
+                alert('Error uploading file: ' + error.message);
+                submitBtn.disabled = false;
+                loader.style.display = 'none';
+                btnText.textContent = 'Try Again';
+            }
+        });
+
+        function animateSteps() {
+            const steps = [1, 2, 3, 4, 5];
+            steps.forEach(i => document.getElementById('step-' + i).classList.remove('active'));
+            
+            let current = 0;
+            const interval = setInterval(() => {
+                if (current < steps.length) {
+                    document.getElementById('step-' + (current + 1)).classList.add('active');
+                    current++;
+                } else {
+                    clearInterval(interval);
+                }
+            }, 600);
+        }
+    </script>
+</body>
+</html>

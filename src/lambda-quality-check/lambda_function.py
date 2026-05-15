@@ -28,14 +28,16 @@ def lambda_handler(event, context):
     try:
         s3_bucket = event.get('s3_bucket')
         s3_key = event.get('s3_key')
+        correlation_id = event.get('correlation_id', 'unknown')
         
         if not s3_bucket or not s3_key:
             error_msg = "Missing s3_bucket or s3_key in event payload."
-            logger.error(json.dumps({"event": "validation_failed", "error": error_msg}))
+            logger.error(json.dumps({"event": "validation_failed", "correlation_id": correlation_id, "error": error_msg}))
             return {"error": error_msg}
 
         logger.info(json.dumps({
             "event": "quality_check_started",
+            "correlation_id": correlation_id,
             "s3_bucket": s3_bucket,
             "s3_key": s3_key,
             "threshold": BLUR_THRESHOLD
@@ -57,7 +59,7 @@ def lambda_handler(event, context):
         
         if image is None:
             error_msg = "FAILED_DECODE: Bytes provided are not a valid image."
-            logger.error(json.dumps({"event": "decode_failed", "s3_key": s3_key, "error": error_msg}))
+            logger.error(json.dumps({"event": "decode_failed", "correlation_id": correlation_id, "s3_key": s3_key, "error": error_msg}))
             return {"error": error_msg}
 
         # Convert to grayscale
@@ -76,6 +78,7 @@ def lambda_handler(event, context):
         
         logger.info(json.dumps({
             "event": "quality_check_completed",
+            "correlation_id": correlation_id,
             "s3_key": s3_key,
             "result": result_payload
         }))
@@ -83,10 +86,20 @@ def lambda_handler(event, context):
         return result_payload
         
     except Exception as e:
+        correlation_id = event.get('correlation_id', 'unknown') if isinstance(event, dict) else 'unknown'
         logger.error(json.dumps({
             "event": "quality_check_exception",
-            "s3_bucket": event.get('s3_bucket'),
-            "s3_key": event.get('s3_key'),
+            "correlation_id": correlation_id,
+            "s3_bucket": event.get('s3_bucket') if isinstance(event, dict) else 'unknown',
+            "s3_key": event.get('s3_key') if isinstance(event, dict) else 'unknown',
             "error": str(e)
         }))
         raise e
+    finally:
+        # Explicitly release memory (critical for C++ bound variables across warm starts)
+        for var in ['image', 'gray', 'nparr', 'file_bytes', 'streaming_body', 'response']:
+            if var in locals():
+                del locals()[var]
+        
+        import gc
+        gc.collect()

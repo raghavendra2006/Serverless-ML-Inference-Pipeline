@@ -25,6 +25,7 @@
         },
         "MinConfidence": 70
       },
+      "TimeoutSeconds": 15,
       "Retry": [
         {
           "ErrorEquals": [
@@ -91,6 +92,7 @@
         "MaxLabels": 10,
         "MinConfidence": 80
       },
+      "TimeoutSeconds": 15,
       "Retry": [
         {
           "ErrorEquals": [

@@ -9,10 +9,9 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install system dependencies for python-magic (libmagic)
+# Install system dependencies (curl for healthcheck)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libmagic1 \
         curl && \
     rm -rf /var/lib/apt/lists/*
 
@@ -22,15 +21,18 @@ RUN groupadd --gid 1000 appuser && \
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY src/intake-api/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY src/intake-api/ .
-
-# Switch to non-root user
+# Switch to non-root user early for zero-trust package installation
 USER appuser
+
+# Add local pip bin to PATH
+ENV PATH="/home/appuser/.local/bin:${PATH}"
+
+# Install Python dependencies
+COPY --chown=appuser:appuser src/intake-api/requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Copy application code with correct ownership
+COPY --chown=appuser:appuser src/intake-api/ .
 
 # Expose the application port
 EXPOSE 8080
