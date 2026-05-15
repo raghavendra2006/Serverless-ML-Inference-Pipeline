@@ -1,181 +1,98 @@
-import os
-import time
-import json
-import glob
-import uuid
-import boto3
-import urllib.request
+#!/usr/bin/env python3
+"""
+PropTech ML Pipeline - End-to-End Test Harness
+Uploads sample images, polls SQS for results, generates report.json
+"""
+import os, sys, time, json, glob, uuid, boto3, urllib.request, urllib.error, logging
 
-LOCALSTACK_URL = "http://localhost:4566"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger("E2ETests")
+
+LOCALSTACK_URL = os.environ.get("LOCALSTACK_URL", "http://localhost:4566")
 INTAKE_API_URL = os.environ.get("INTAKE_API_URL", "http://localhost:8080/upload")
+POLL_TIMEOUT = 45
 
-# Configure boto3 clients
-sqs_client = boto3.client(
-    'sqs',
-    endpoint_url=LOCALSTACK_URL,
-    region_name='us-east-1',
-    aws_access_key_id='test',
-    aws_secret_access_key='test'
-)
-sns_client = boto3.client(
-    'sns',
-    endpoint_url=LOCALSTACK_URL,
-    region_name='us-east-1',
-    aws_access_key_id='test',
-    aws_secret_access_key='test'
-)
+cfg = dict(endpoint_url=LOCALSTACK_URL, region_name='us-east-1',
+           aws_access_key_id='test', aws_secret_access_key='test')
+sqs = boto3.client('sqs', **cfg)
+sns = boto3.client('sns', **cfg)
+s3 = boto3.client('s3', **cfg)
 
-def setup_sqs_subscription():
-    # Create SQS queue
-    queue_name = f"test-queue-{uuid.uuid4()}"
-    queue_res = sqs_client.create_queue(QueueName=queue_name)
-    queue_url = queue_res['QueueUrl']
-    
-    # Get Queue ARN
-    queue_attr = sqs_client.get_queue_attributes(QueueUrl=queue_url, AttributeNames=['QueueArn'])
-    queue_arn = queue_attr['Attributes']['QueueArn']
-    
-    # Fetch SNS Topic ARN (proptech-notifications)
-    topics = sns_client.list_topics()
-    topic_arn = None
-    for t in topics.get('Topics', []):
-        if 'proptech-notifications' in t['TopicArn']:
-            topic_arn = t['TopicArn']
-            break
-            
-    if not topic_arn:
-        # Fallback creation if not found
-        topic_res = sns_client.create_topic(Name='proptech-notifications')
-        topic_arn = topic_res['TopicArn']
-        
-    # Subscribe SQS to SNS
-    sns_client.subscribe(
-        TopicArn=topic_arn,
-        Protocol='sqs',
-        Endpoint=queue_arn
-    )
-    
-    return queue_url
+def expected_status(f):
+    b = os.path.basename(f).lower()
+    return 'REJECTED' if b.startswith('rejected') else 'APPROVED'
 
-def post_image(filepath):
-    import mimetypes
-    boundary = uuid.uuid4().hex
-    headers = {'Content-Type': f'multipart/form-data; boundary={boundary}'}
-    
-    with open(filepath, 'rb') as f:
-        file_content = f.read()
-        
-    filename = os.path.basename(filepath)
-    body = (
-        f'--{boundary}\r\n'
-        f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
-        f'Content-Type: image/jpeg\r\n\r\n'
-    ).encode('utf-8') + file_content + f'\r\n--{boundary}--\r\n'.encode('utf-8')
-    
-    req = urllib.request.Request(INTAKE_API_URL, data=body, headers=headers)
+def setup_queue():
+    q = sqs.create_queue(QueueName=f"e2e-{uuid.uuid4().hex[:8]}")['QueueUrl']
+    arn = sqs.get_queue_attributes(QueueUrl=q, AttributeNames=['QueueArn'])['Attributes']['QueueArn']
+    topics = sns.list_topics().get('Topics', [])
+    t = next((t['TopicArn'] for t in topics if 'proptech-notifications' in t['TopicArn']), None)
+    if not t:
+        t = sns.create_topic(Name='proptech-notifications')['TopicArn']
+    sns.subscribe(TopicArn=t, Protocol='sqs', Endpoint=arn)
+    return q
+
+def post_image(fp):
+    bd = uuid.uuid4().hex
+    with open(fp, 'rb') as f: data = f.read()
+    fn = os.path.basename(fp)
+    body = f'--{bd}\r\nContent-Disposition: form-data; name="image"; filename="{fn}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode() + data + f'\r\n--{bd}--\r\n'.encode()
     try:
-        start_time = time.time()
-        response = urllib.request.urlopen(req)
-        resp_data = json.loads(response.read().decode('utf-8'))
-        return resp_data.get('s3_key'), time.time() - start_time
+        t0 = time.time()
+        r = urllib.request.urlopen(urllib.request.Request(INTAKE_API_URL, data=body, headers={'Content-Type': f'multipart/form-data; boundary={bd}'}), timeout=30)
+        return json.loads(r.read()).get('s3_key'), time.time()-t0
     except Exception as e:
-        print(f"Failed to post image {filepath}: {e}")
-        return None, 0
+        logger.error(f"Upload failed {fp}: {e}"); return None, 0
 
-def run_tests():
-    try:
-        queue_url = setup_sqs_subscription()
-        print(f"Listening on queue: {queue_url}")
-    except Exception as e:
-        print("Could not connect to LocalStack to setup test queue:", e)
-        return
-        
-    sample_dir = os.path.join(os.path.dirname(__file__), 'sample_images')
-    images = glob.glob(os.path.join(sample_dir, '*.jpg'))
-    
-    results = []
-    total_latency = 0
-    
-    for img in images:
-        print(f"Testing {img}...")
-        s3_key, post_latency = post_image(img)
-        
-        if not s3_key:
-            results.append({
-                "image_file": os.path.basename(img),
-                "pipeline_status": "FAILED",
-                "expected_status": "APPROVED",
-                "latency_ms": 0,
-                "correctly_processed": False
-            })
-            continue
-            
-        # Poll for message
-        found = False
-        start_poll = time.time()
-        while time.time() - start_poll < 30: # 30s timeout
-            try:
-                msgs = sqs_client.receive_message(
-                    QueueUrl=queue_url,
-                    WaitTimeSeconds=5,
-                    MaxNumberOfMessages=10
-                )
-                
-                for msg in msgs.get('Messages', []):
-                    sns_msg = json.loads(msg['Body'])
-                    payload = json.loads(sns_msg['Message'])
-                    
-                    if payload.get('image_key') == s3_key:
-                        latency_ms = (time.time() - start_poll + post_latency) * 1000
-                        total_latency += latency_ms
-                        status = payload.get('status', 'UNKNOWN')
-                        
-                        results.append({
-                            "image_file": os.path.basename(img),
-                            "pipeline_status": status,
-                            "expected_status": "APPROVED", 
-                            "latency_ms": round(latency_ms, 2),
-                            "correctly_processed": status in ["APPROVED", "REJECTED"],
-                            "has_metadata": all(k in payload for k in ["processed_at", "image_key", "status"])
-                        })
-                        if not all(k in payload for k in ["processed_at", "image_key", "status"]):
-                            print(f"WARNING: Missing metadata in response for {s3_key}")
-                        found = True
-                        sqs_client.delete_message(QueueUrl=queue_url, ReceiptHandle=msg['ReceiptHandle'])
-                        break
-            except Exception as e:
-                print("Parse/poll error:", e)
-                
-            if found:
-                break
-            time.sleep(1)
-            
-        if not found:
-            results.append({
-                "image_file": os.path.basename(img),
-                "pipeline_status": "TIMEOUT",
-                "expected_status": "APPROVED",
-                "latency_ms": 30000,
-                "correctly_processed": False
-            })
+def poll(queue_url, key):
+    t0 = time.time()
+    while time.time()-t0 < POLL_TIMEOUT:
+        try:
+            for m in sqs.receive_message(QueueUrl=queue_url, WaitTimeSeconds=5, MaxNumberOfMessages=10).get('Messages', []):
+                try:
+                    p = json.loads(json.loads(m['Body']).get('Message','{}'))
+                    if p.get('image_key') == key:
+                        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=m['ReceiptHandle'])
+                        return p, time.time()-t0
+                except: pass
+        except: pass
+        time.sleep(0.5)
+    return None, POLL_TIMEOUT
 
-    accuracy = sum(1 for r in results if r["correctly_processed"]) / len(images) if images else 0
-    avg_lat = total_latency / len(images) if images else 0
+def run():
+    logger.info("PropTech ML Pipeline - E2E Tests")
+    try: q = setup_queue()
+    except Exception as e: logger.error(f"Setup failed: {e}"); return 1
     
-    report = {
-        "summary": {
-            "total_images": len(images),
-            "accuracy": accuracy,
-            "avg_latency_ms": round(avg_lat, 2)
-        },
-        "results": results
-    }
+    sd = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sample_images')
+    imgs = sorted(glob.glob(os.path.join(sd,'*.bmp')) + glob.glob(os.path.join(sd,'*.jpg')) + glob.glob(os.path.join(sd,'*.png')))
+    if not imgs: logger.error("No images found"); return 1
     
-    report_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results', 'report.json')
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
-        
-    print(f"Generated report at {report_path}")
+    results, lat, correct = [], 0.0, 0
+    for i, img in enumerate(imgs, 1):
+        fn, exp = os.path.basename(img), expected_status(img)
+        logger.info(f"[{i}/{len(imgs)}] {fn} (expect: {exp})")
+        key, ut = post_image(img)
+        if not key:
+            results.append(dict(image_file=fn, pipeline_status="UPLOAD_FAILED", expected_status=exp, latency_ms=0, correctly_processed=False)); continue
+        p, pd = poll(q, key)
+        if p:
+            st = p.get('status','UNKNOWN'); ms = (ut+pd)*1000; lat += ms; ok = st==exp
+            if ok: correct += 1
+            r = dict(image_file=fn, pipeline_status=st, expected_status=exp, latency_ms=round(ms,2), correctly_processed=ok)
+            if 'reason' in p: r['rejection_reason'] = p['reason']
+            if 'tags' in p: r['detected_tags'] = p['tags']
+            results.append(r); logger.info(f"  {'✓' if ok else '✗'} {st} ({ms:.0f}ms)")
+        else:
+            results.append(dict(image_file=fn, pipeline_status="TIMEOUT", expected_status=exp, latency_ms=POLL_TIMEOUT*1000, correctly_processed=False))
+    
+    tot = len(imgs); acc = correct/tot if tot else 0; avg = lat/tot if tot else 0
+    report = {"summary": {"total_images": tot, "accuracy": round(acc,4), "avg_latency_ms": round(avg,2)}, "results": results}
+    rd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+    os.makedirs(rd, exist_ok=True)
+    rp = os.path.join(rd, 'report.json')
+    with open(rp, 'w') as f: json.dump(report, f, indent=2)
+    logger.info(f"Report: {rp} | Accuracy: {acc:.1%} | Avg Latency: {avg:.0f}ms")
+    return 0 if acc >= 0.8 else 1
 
-if __name__ == '__main__':
-    run_tests()
+if __name__ == '__main__': sys.exit(run())

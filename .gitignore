@@ -1,0 +1,77 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# =============================================================================
+# Virtual Environments
+# =============================================================================
+venv/
+.venv/
+env/
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+.env
+*.pem
+*.key
+
+# =============================================================================
+# Lambda vendor dependencies (installed at build time)
+# =============================================================================
+src/lambda-quality-check/boto3/
+src/lambda-quality-check/boto3-*/
+src/lambda-quality-check/botocore/
+src/lambda-quality-check/botocore-*/
+src/lambda-quality-check/cv2/
+src/lambda-quality-check/numpy/
+src/lambda-quality-check/numpy-*/
+src/lambda-quality-check/numpy.libs/
+src/lambda-quality-check/opencv_python_headless*/
+src/lambda-quality-check/dateutil/
+src/lambda-quality-check/jmespath/
+src/lambda-quality-check/jmespath-*/
+src/lambda-quality-check/python_dateutil-*/
+src/lambda-quality-check/s3transfer/
+src/lambda-quality-check/s3transfer-*/
+src/lambda-quality-check/six.py
+src/lambda-quality-check/six-*/
+src/lambda-quality-check/tenacity/
+src/lambda-quality-check/tenacity-*/
+src/lambda-quality-check/urllib3/
+src/lambda-quality-check/urllib3-*/
+src/lambda-quality-check/bin/
+
+# =============================================================================
+# LocalStack / Docker
+# =============================================================================
+volume/
+*.zip
+
+# =============================================================================
+# IDE
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Test Results (regenerated each run)
+# =============================================================================
+results/report.json

@@ -6,10 +6,10 @@ services:
     image: localstack/localstack:3.0.0
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack Gateway
-      - "127.0.0.1:4510-4559:4510-4559"  # external services port range
+      - "127.0.0.1:4510-4559:4510-4559"  # External services port range
     environment:
       - DEBUG=${DEBUG:-0}
-      - SERVICES=s3,lambda,stepfunctions,rekognition,sns,sts,iam,sqs,events
+      - SERVICES=s3,lambda,stepfunctions,rekognition,sns,sts,iam,sqs,events,backup
       - DEFAULT_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
@@ -27,4 +27,39 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
       timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - pipeline-net
+
+  intake-api:
+    container_name: intake-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - FLASK_ENV=development
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - LOCALSTACK_HOSTNAME=localstack
+      - UPLOAD_WORKERS=10
+      - BLUR_THRESHOLD=100.0
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
       retries: 5
+      start_period: 10s
+    networks:
+      - pipeline-net
+
+networks:
+  pipeline-net:
+    driver: bridge

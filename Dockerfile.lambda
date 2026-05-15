@@ -1,0 +1,29 @@
+# =============================================================================
+# Dockerfile.lambda - Build Lambda Deployment Package
+# Uses Amazon Linux 2 compatible base to ensure native dependencies work
+# =============================================================================
+
+FROM python:3.9-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        zip && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy requirements and install into target directory
+COPY src/lambda-quality-check/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt -t /build/package/
+
+# Copy Lambda function code
+COPY src/lambda-quality-check/lambda_function.py /build/package/
+
+# Create deployment zip
+WORKDIR /build/package
+RUN zip -r9 /build/function.zip .
+
+# Final stage - just the zip
+FROM scratch
+COPY --from=builder /build/function.zip /function.zip

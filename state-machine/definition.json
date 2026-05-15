@@ -1,16 +1,17 @@
 {
-  "Comment": "Enterprise-grade Serverless ML Inference Pipeline",
+  "Comment": "PropTech Serverless ML Inference Pipeline - Image Moderation, Classification & Quality Check",
   "StartAt": "ExtractS3Details",
   "States": {
     "ExtractS3Details": {
       "Type": "Pass",
       "Parameters": {
-        "s3_bucket.$": "$.Records[0].s3.bucket.name",
-        "s3_key.$": "$.Records[0].s3.object.key",
+        "s3_bucket.$": "$.detail.bucket.name",
+        "s3_key.$": "$.detail.object.key",
         "timestamp.$": "$$.Execution.StartTime"
       },
       "ResultPath": "$.S3Details",
-      "Next": "ContentModeration"
+      "Next": "ContentModeration",
+      "Comment": "Extract S3 bucket and key from the event notification payload"
     },
     "ContentModeration": {
       "Type": "Task",
@@ -39,10 +40,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "FailState"
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandlePipelineError",
+          "ResultPath": "$.ErrorInfo"
         }
       ],
       "ResultPath": "$.ModerationResult",
@@ -50,10 +50,19 @@
     },
     "ModerationChoice": {
       "Type": "Choice",
+      "Comment": "If ModerationLabels array is not empty AND any label Confidence > 80.0, reject",
       "Choices": [
         {
-          "Variable": "$.ModerationResult.ModerationLabels[0]",
-          "IsPresent": true,
+          "And": [
+            {
+              "Variable": "$.ModerationResult.ModerationLabels[0]",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ModerationResult.ModerationLabels[0].Confidence",
+              "NumericGreaterThan": 80.0
+            }
+          ],
           "Next": "RejectModeration"
         }
       ],
@@ -63,10 +72,8 @@
       "Type": "Pass",
       "Parameters": {
         "status": "REJECTED",
-        "reason": "content_moderation_failure",
-        "details.$": "$.ModerationResult.ModerationLabels",
         "image_key.$": "$.S3Details.s3_key",
-        "processed_at.$": "$$.Execution.StartTime"
+        "reason": "inappropriate_content"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -99,10 +106,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "FailState"
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandlePipelineError",
+          "ResultPath": "$.ErrorInfo"
         }
       ],
       "ResultPath": "$.ClassificationResult",
@@ -130,10 +136,9 @@
       ],
       "Catch": [
         {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "FailState"
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandlePipelineError",
+          "ResultPath": "$.ErrorInfo"
         }
       ],
       "ResultPath": "$.QualityResult",
@@ -141,6 +146,7 @@
     },
     "QualityChoice": {
       "Type": "Choice",
+      "Comment": "If is_blurry is true, reject the image for low quality",
       "Choices": [
         {
           "Variable": "$.QualityResult.is_blurry",
@@ -154,10 +160,8 @@
       "Type": "Pass",
       "Parameters": {
         "status": "REJECTED",
-        "reason": "blur_detection_failure",
-        "score.$": "$.QualityResult.blur_score",
         "image_key.$": "$.S3Details.s3_key",
-        "processed_at.$": "$$.Execution.StartTime"
+        "reason": "low_quality"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -167,9 +171,7 @@
       "Parameters": {
         "status": "APPROVED",
         "image_key.$": "$.S3Details.s3_key",
-        "classification.$": "$.ClassificationResult.Labels",
-        "quality_score.$": "$.QualityResult.blur_score",
-        "processed_at.$": "$$.Execution.StartTime"
+        "tags.$": "$.ClassificationResult.Labels[*].Name"
       },
       "ResultPath": "$.FinalResult",
       "Next": "NotifyAgent"
@@ -184,6 +186,10 @@
           "Status": {
             "DataType": "String",
             "StringValue.$": "$.FinalResult.status"
+          },
+          "ImageKey": {
+            "DataType": "String",
+            "StringValue.$": "$.FinalResult.image_key"
           }
         }
       },
@@ -198,24 +204,25 @@
           "BackoffRate": 2.0
         }
       ],
-      "End": true,
       "Catch": [
         {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "Next": "FailState"
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandlePipelineError",
+          "ResultPath": "$.ErrorInfo"
         }
-      ]
+      ],
+      "End": true
     },
-    "FailState": {
+    "HandlePipelineError": {
       "Type": "Task",
+      "Comment": "Global error handler - publishes failure notification to SNS",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "<SNS_TOPIC_ARN>",
         "Message": {
           "status": "CRITICAL_FAILURE",
-          "reason": "unhandled_pipeline_exception"
+          "reason": "unhandled_pipeline_exception",
+          "image_key": "unknown"
         }
       },
       "End": true
